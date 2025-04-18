@@ -1,10 +1,13 @@
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from fastapi import File, Form, UploadFile
+from fastapi import FastAPI, File, Form, UploadFile, Query
 from pydantic import BaseModel
 from urllib.parse import unquote
 from bs4 import BeautifulSoup
-from typing import List
+from typing import List, Optional
+from sqlmodel import Field, SQLModel, create_engine, Session
+from datetime import datetime, timedelta
+import uuid
 import requests
 import logging
 import re
@@ -13,6 +16,36 @@ import json
 import html as html_module
 
 logger = logging.getLogger('uvicorn.error')
+
+# --- MODELO SQLMODEL PARA SESIONES ---
+class Sesion(SQLModel, table=True):
+    id: str = Field(primary_key=True)
+    email: str
+    cookies: str  # json.dumps de las cookies
+    fecha_login: datetime = Field(default_factory=datetime.utcnow)
+
+# --- BASE DE DATOS ---
+engine = create_engine("sqlite:///sesiones.db")
+SQLModel.metadata.create_all(engine)
+
+SESSION_TIMEOUT_MINUTES = 60  # Tiempo de expiración de sesión
+
+def guardar_sesion(session_id: str, email: str, cookies: dict):
+    with Session(engine) as db:
+        db.add(Sesion(id=session_id, email=email, cookies=json.dumps(cookies)))
+        db.commit()
+
+def obtener_sesion(session_id: str) -> Optional[Sesion]:
+    with Session(engine) as db:
+        sesion = db.get(Sesion, session_id)
+        if not sesion:
+            return None
+        if datetime.utcnow() - sesion.fecha_login > timedelta(minutes=SESSION_TIMEOUT_MINUTES):
+            db.delete(sesion)
+            db.commit()
+            return None
+        return sesion
+
 
 app = FastAPI()
 #########################
@@ -34,39 +67,36 @@ class CepreunaAPI:
 ###### Configuraciones  #######
 ############################### 
 
-    def __init__(self):
+    def __init__(self, session_id: str):
+        self.session_id = session_id
         self.base_url = "https://app.cepreuna.edu.pe"
         self.session = requests.Session()
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0",
             "Accept": "application/json",
         })
-        self.cookie_file = "session_cookies.json"
-        self._load_cookies()  # <- PARÉNTESIS CORREGIDOS
-        
-    def _save_cookies(self):
-        with open(self.cookie_file, "w") as f:
-            cookies = self.session.cookies.get_dict()
-            json.dump(cookies, f)
+        self._load_cookies()
+
+    def _save_cookies(self, email: str):
+        cookies = self.session.cookies.get_dict()
+        guardar_sesion(self.session_id, email, cookies)
 
     def _load_cookies(self):
-        if os.path.exists(self.cookie_file):
-            with open(self.cookie_file, "r") as f:
-                cookies = json.load(f)
+        sesion = obtener_sesion(self.session_id)
+        if sesion:
+            try:
+                cookies = json.loads(sesion.cookies)
                 self.session.cookies.update(cookies)
+            except Exception as e:
+                logger.warning(f"Error al cargar cookies de DB: {e}")
 
     def _get_decoded_cookie(self, name):
         cookie = self.session.cookies.get(name)
         return unquote(cookie) if cookie else None
 
     def login(self, email, password):
-        # Siempre empezamos con sesión nueva
-        self.logout()  # <- Esto elimina cookies y limpia la sesión
-        
-        # Acceder al home para obtener las cookies necesarias
+        self.logout()
         self.session.get(f"{self.base_url}/")
-        self._save_cookies()  # Guarda cookies incluso antes de login
-
         xsrf_token = self._get_decoded_cookie("XSRF-TOKEN")
         if not xsrf_token:
             return False
@@ -82,15 +112,18 @@ class CepreunaAPI:
         )
 
         if response.status_code == 200:
-            self._save_cookies()
+            self._save_cookies(email)
             return True
         return False
 
     def logout(self):
         self.session.cookies.clear()
         self.session.close()
-        if os.path.exists(self.cookie_file):
-            os.remove(self.cookie_file)
+        with Session(engine) as db:
+            sesion = db.get(Sesion, self.session_id)
+            if sesion:
+                db.delete(sesion)
+                db.commit()
 
     def is_logged_in(self):
         xsrf_token = self._get_decoded_cookie("XSRF-TOKEN")
@@ -314,7 +347,6 @@ class CepreunaAPI:
 
     def get_page_dashboard(self):
         xsrf_token = self._get_decoded_cookie("XSRF-TOKEN")
-        # 1. Obtener HTML sin headers de Inertia
         html_response = self.session.get(
             f"{self.base_url}/dashboard",
             headers={
@@ -327,11 +359,6 @@ class CepreunaAPI:
             logger.warning(f"Fallo al obtener /dashboard (código {html_response.status_code})")
             return None
 
-        # 2. Guardar el HTML para depuración (opcional)
-        with open("dashboard_raw.html", "w", encoding="utf-8") as f:
-            f.write(html_response.text)
-
-        # 3. Procesar el HTML con BeautifulSoup
         soup = BeautifulSoup(html_response.text, "html.parser")
         div_app = soup.find("div", id="app")
         data_page_raw = div_app.get("data-page") if div_app else None
@@ -351,7 +378,6 @@ class CepreunaAPI:
             logger.error(f"Error al parsear JSON desde data-page: {e}")
             return None
 
-        # 4. Segunda petición con headers Inertia válidos
         inertia_response = self.session.get(
             f"{self.base_url}/dashboard",
             headers={
@@ -745,8 +771,8 @@ class CepreunaAPI:
 
 @app.post("/api/login")
 async def handle_login(data: LoginRequest ):
-    api = CepreunaAPI()
-
+    session_id = str(uuid.uuid4())
+    api = CepreunaAPI(session_id=session_id)
     if api.login(data.email, data.password):
         horario = api.get_criterios_docente(modalidad=1)
         cuadernillos = api.get_page_cuadernillo()
@@ -778,11 +804,11 @@ async def handle_logout():
     })
 #######################################################
 @app.get("/api/horario")
-async def get_horario():
-    api = CepreunaAPI()
-    if api.is_logged_in():
-        return CepreunaAPI().get_horario()
-    return JSONResponse(status_code=403, content={"error": "Sesión expirada o no válida"})
+async def get_horario(session_id: str = Query(...)):
+    if not obtener_sesion(session_id):
+        return JSONResponse(status_code=403, content={"error": "Sesión no válida o expirada."})
+    api = CepreunaAPI(session_id=session_id)
+    return api.get_horario()
 
 @app.get("/api/carga")
 async def get_carga():
@@ -859,11 +885,11 @@ async def registrar_pago(data: TokenRequest):
 #############################################################
 
 @app.get("/api/page/dashboard")
-async def get_page_dashboard():
-    api = CepreunaAPI()
-    if api.is_logged_in():
-        return CepreunaAPI().get_page_dashboard()
-    return JSONResponse(status_code=403, content={"error": "Sesión expirada o no válida"})
+async def get_dashboard(session_id: str = Query(...)):
+    if not obtener_sesion(session_id):
+        return JSONResponse(status_code=403, content={"error": "Sesión no válida o expirada."})
+    api = CepreunaAPI(session_id=session_id)
+    return api.get_page_dashboard()
 
 @app.get("/api/page/perfil")
 async def get_page_perfil():
