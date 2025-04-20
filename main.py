@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi import FastAPI, File, Form, UploadFile, Query, Cookie
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel
 from urllib.parse import unquote
 from bs4 import BeautifulSoup
@@ -52,9 +53,11 @@ def obtener_sesion(session_id: str) -> Optional[Sesion]:
 
 app = FastAPI()
 
+origins = ["*"]  # no se usará directamente, pero lo dejamos para completar
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # o "*"
+    allow_origin_regex='.*',  # ✅ permite cualquier dominio usando regex
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
