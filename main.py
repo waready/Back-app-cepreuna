@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from fastapi import FastAPI, File, Form, UploadFile, Query
+from fastapi import FastAPI, File, Form, UploadFile, Query, Cookie
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from urllib.parse import unquote
 from bs4 import BeautifulSoup
@@ -16,6 +17,8 @@ import json
 import html as html_module
 
 logger = logging.getLogger('uvicorn.error')
+
+
 
 # --- MODELO SQLMODEL PARA SESIONES ---
 class Sesion(SQLModel, table=True):
@@ -48,6 +51,15 @@ def obtener_sesion(session_id: str) -> Optional[Sesion]:
 
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],  # o "*"
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 #########################
 ###### Interfaces #######
 ######################### 
@@ -769,95 +781,136 @@ class CepreunaAPI:
 #######   Rutas  ########
 ######################### 
 
+# @app.post("/api/login")
+# async def handle_login(data: LoginRequest ):
+#     session_id = str(uuid.uuid4())
+#     api = CepreunaAPI(session_id=session_id)
+#     if api.login(data.email, data.password):
+#         horario = api.get_criterios_docente(modalidad=1)
+#         cuadernillos = api.get_page_cuadernillo()
+#         #get_perfil =  api.get_page_horarios()
+#         #publicaciones = api.get_publicaciones(page=1, tipo=1)
+#         #if horario:
+#         return JSONResponse(content={
+#             "success": True,
+#             "cuadernillo": cuadernillos,
+#            # "dashboard":dashboard,
+#            # "get_perfil": get_perfil,
+#            # "horario": horario,
+#            # "cuadernillos": cuadernillos.get('cuadernillos', []),
+#             "message": "Datos obtenidos correctamente"
+#         })
+
+#     return JSONResponse(content={
+#         "success": False,
+#         "error": "Credenciales incorrectas o error al obtener datos"
+#     })
+
 @app.post("/api/login")
-async def handle_login(data: LoginRequest ):
+async def handle_login(data: LoginRequest):
     session_id = str(uuid.uuid4())
     api = CepreunaAPI(session_id=session_id)
+
     if api.login(data.email, data.password):
-        horario = api.get_criterios_docente(modalidad=1)
         cuadernillos = api.get_page_cuadernillo()
-        #get_perfil =  api.get_page_horarios()
-        #publicaciones = api.get_publicaciones(page=1, tipo=1)
-        #if horario:
-        return JSONResponse(content={
+
+        response = JSONResponse(content={
             "success": True,
             "cuadernillo": cuadernillos,
-           # "dashboard":dashboard,
-           # "get_perfil": get_perfil,
-           # "horario": horario,
-           # "cuadernillos": cuadernillos.get('cuadernillos', []),
             "message": "Datos obtenidos correctamente"
         })
+        response.set_cookie("session_id", session_id, httponly=True, max_age=3600, samesite="lax")
+        return response
 
-    return JSONResponse(content={
-        "success": False,
-        "error": "Credenciales incorrectas o error al obtener datos"
-    })
+    return JSONResponse(
+        content={"success": False, "error": "Credenciales incorrectas o error al obtener datos"},
+        status_code=401
+    )
 
 @app.post("/api/logout")
-async def handle_logout():
-    api = CepreunaAPI()
-    api.logout()
-    return JSONResponse(content={
-        "success": True,
-        "message": "Sesión cerrada correctamente"
-    })
+async def handle_logout(session_id: str = Cookie(None)):
+    if session_id:
+        CepreunaAPI(session_id).logout()
+    response = JSONResponse(content={"success": True, "message": "Sesión cerrada correctamente"})
+    response.delete_cookie("session_id")
+    return response
+
+@app.get("/api/verify-session")
+async def verify_session(session_id: str = Cookie(None)):
+    if session_id and obtener_sesion(session_id):
+        return {"success": True}
+    return {"success": False}
+
 #######################################################
 @app.get("/api/horario")
-async def get_horario(session_id: str = Query(...)):
-    if not obtener_sesion(session_id):
+async def get_horario(session_id: str = Cookie(None)):
+    if not session_id or not obtener_sesion(session_id):
         return JSONResponse(status_code=403, content={"error": "Sesión no válida o expirada."})
-    api = CepreunaAPI(session_id=session_id)
+
+    api = CepreunaAPI(session_id)
     return api.get_horario()
 
 @app.get("/api/carga")
-async def get_carga():
-    api = CepreunaAPI()
+async def get_carga(session_id: str = Cookie(None)):
+    if not session_id or not obtener_sesion(session_id):
+        return JSONResponse(status_code=403, content={"error": "Sesión no válida o expirada."})
+    api = CepreunaAPI(session_id)
     if api.is_logged_in():
-        return CepreunaAPI().get_carga()
+        return api.get_carga()
     return JSONResponse(status_code=403, content={"error": "Sesión expirada o no válida"})
 
 @app.get("/api/asistencias")
-async def get_asistencias():
-    api = CepreunaAPI()
+async def get_asistencias(session_id: str = Cookie(None)):
+    if not session_id or not obtener_sesion(session_id):
+        return JSONResponse(status_code=403, content={"error": "Sesión no válida o expirada."})
+    api = CepreunaAPI(session_id)
     if api.is_logged_in():
-        return CepreunaAPI().get_asistencias()
+        return api.get_asistencias()
     return JSONResponse(status_code=403, content={"error": "Sesión expirada o no válida"})
 
 @app.get("/api/rango-fechas")
-async def get_rango_fechas():
-    api = CepreunaAPI()
+async def get_rango_fechas(session_id: str = Cookie(None)):
+    if not session_id or not obtener_sesion(session_id):
+        return JSONResponse(status_code=403, content={"error": "Sesión no válida o expirada."})
+    api = CepreunaAPI(session_id)
     if api.is_logged_in():
-        return CepreunaAPI().get_rango_fechas()
+        return api.get_rango_fechas()
     return JSONResponse(status_code=403, content={"error": "Sesión expirada o no válida"})
 
 @app.get("/api/cuadernillos")
-async def get_cuadernillos():
-    api = CepreunaAPI()
+async def get_cuadernillos(session_id: str = Cookie(None)):
+    if not session_id or not obtener_sesion(session_id):
+        return JSONResponse(status_code=403, content={"error": "Sesión no válida o expirada."})
+    api = CepreunaAPI(session_id)
     if api.is_logged_in():
-        return CepreunaAPI().get_cuadernillos()
+        return api.get_cuadernillos()
     return JSONResponse(status_code=403, content={"error": "Sesión expirada o no válida"})
-        
 
 @app.get("/api/cuadernillos-format")
-async def get_cuadernillos_format():
-    api = CepreunaAPI()
+async def get_cuadernillos_format(session_id: str = Cookie(None)):
+    if not session_id or not obtener_sesion(session_id):
+        return JSONResponse(status_code=403, content={"error": "Sesión no válida o expirada."})
+    api = CepreunaAPI(session_id)
     if api.is_logged_in():
-        return CepreunaAPI().get_cuadernillos_format()
+        return api.get_cuadernillos_format()
     return JSONResponse(status_code=403, content={"error": "Sesión expirada o no válida"})
 
 @app.get("/api/criterios-docente")
-async def get_criterios_docente(modalidad: int = 1):
-    api = CepreunaAPI()
+async def get_criterios_docente(modalidad: int = 1, session_id: str = Cookie(None)):
+    if not session_id or not obtener_sesion(session_id):
+        return JSONResponse(status_code=403, content={"error": "Sesión no válida o expirada."})
+    api = CepreunaAPI(session_id)
     if api.is_logged_in():
-        return CepreunaAPI().get_criterios_docente(modalidad=modalidad)
+        return api.get_criterios_docente(modalidad=modalidad)
     return JSONResponse(status_code=403, content={"error": "Sesión expirada o no válida"})
 
 @app.get("/api/publicaciones")
-async def get_publicaciones(page: int = 1, tipo: int = 1):
-    api = CepreunaAPI()
+async def get_publicaciones(page: int = 1, tipo: int = 1, session_id: str = Cookie(None)):
+    if not session_id or not obtener_sesion(session_id):
+        return JSONResponse(status_code=403, content={"error": "Sesión no válida o expirada."})
+    api = CepreunaAPI(session_id)
     if api.is_logged_in():
-        return CepreunaAPI().get_publicaciones(page=page, tipo=tipo)
+        return api.get_publicaciones(page=page, tipo=tipo)
     return JSONResponse(status_code=403, content={"error": "Sesión expirada o no válida"})
 
 @app.post("/api/pagos/{user_id}")
@@ -876,59 +929,75 @@ async def validar_cuota(
     )
 
 @app.post("/api/registrar-pago")
-async def registrar_pago(data: TokenRequest):
-    api = CepreunaAPI()
+async def registrar_pago(data: TokenRequest, session_id: str = Cookie(None)):
+    if not session_id or not obtener_sesion(session_id):
+        return JSONResponse(status_code=403, content={"error": "Sesión no válida o expirada."})
+    
+    api = CepreunaAPI(session_id)
     if api.is_logged_in():
         return api.registrar_pago_cuota(tokens=data.tokens)
+    
     return JSONResponse(status_code=403, content={"error": "Sesión expirada o no válida"})
 
 #############################################################
 
 @app.get("/api/page/dashboard")
-async def get_dashboard(session_id: str = Query(...)):
-    if not obtener_sesion(session_id):
+async def get_dashboard(session_id: str = Cookie(None)):
+    if not session_id or not obtener_sesion(session_id):
         return JSONResponse(status_code=403, content={"error": "Sesión no válida o expirada."})
-    api = CepreunaAPI(session_id=session_id)
+    api = CepreunaAPI(session_id)
     return api.get_page_dashboard()
 
 @app.get("/api/page/perfil")
-async def get_page_perfil():
-    api = CepreunaAPI()
+async def get_page_perfil(session_id: str = Cookie(None)):
+    if not session_id or not obtener_sesion(session_id):
+        return JSONResponse(status_code=403, content={"error": "Sesión no válida o expirada."})
+    api = CepreunaAPI(session_id)
     if api.is_logged_in():
-        return CepreunaAPI().get_page_perfil()
+        return api.get_page_perfil()
     return JSONResponse(status_code=403, content={"error": "Sesión expirada o no válida"})
 
 @app.get("/api/page/horarios")
-async def get_page_horarios():
-    api = CepreunaAPI()
+async def get_page_horarios(session_id: str = Cookie(None)):
+    if not session_id or not obtener_sesion(session_id):
+        return JSONResponse(status_code=403, content={"error": "Sesión no válida o expirada."})
+    api = CepreunaAPI(session_id)
     if api.is_logged_in():
-        return CepreunaAPI().get_page_horarios()
+        return api.get_page_horarios()
     return JSONResponse(status_code=403, content={"error": "Sesión expirada o no válida"})
 
 @app.get("/api/page/mis-cursos")
-async def get_page_mis_cursos():
-    api = CepreunaAPI()
+async def get_page_mis_cursos(session_id: str = Cookie(None)):
+    if not session_id or not obtener_sesion(session_id):
+        return JSONResponse(status_code=403, content={"error": "Sesión no válida o expirada."})
+    api = CepreunaAPI(session_id)
     if api.is_logged_in():
-        return CepreunaAPI().get_page_mis_cursos()
+        return api.get_page_mis_cursos()
     return JSONResponse(status_code=403, content={"error": "Sesión expirada o no válida"})
 
 @app.get("/api/page/cuadernillos")
-async def get_page_cuadernillo():
-    api = CepreunaAPI()
+async def get_page_cuadernillo(session_id: str = Cookie(None)):
+    if not session_id or not obtener_sesion(session_id):
+        return JSONResponse(status_code=403, content={"error": "Sesión no válida o expirada."})
+    api = CepreunaAPI(session_id)
     if api.is_logged_in():
-        return CepreunaAPI().get_page_cuadernillo()
+        return api.get_page_cuadernillo()
     return JSONResponse(status_code=403, content={"error": "Sesión expirada o no válida"})
 
 @app.get("/api/page/asistencias")
-async def get_page_asistencias():
-    api = CepreunaAPI()
+async def get_page_asistencias(session_id: str = Cookie(None)):
+    if not session_id or not obtener_sesion(session_id):
+        return JSONResponse(status_code=403, content={"error": "Sesión no válida o expirada."})
+    api = CepreunaAPI(session_id)
     if api.is_logged_in():
-        return CepreunaAPI().get_page_asistencias()
+        return api.get_page_asistencias()
     return JSONResponse(status_code=403, content={"error": "Sesión expirada o no válida"})
 
 @app.get("/api/page/pagos")
-async def get_page_pagos():
-    api = CepreunaAPI()
+async def get_page_pagos(session_id: str = Cookie(None)):
+    if not session_id or not obtener_sesion(session_id):
+        return JSONResponse(status_code=403, content={"error": "Sesión no válida o expirada."})
+    api = CepreunaAPI(session_id)
     if api.is_logged_in():
-        return CepreunaAPI().get_page_pagos()
+        return api.get_page_pagos()
     return JSONResponse(status_code=403, content={"error": "Sesión expirada o no válida"})
