@@ -822,7 +822,14 @@ async def handle_login(data: LoginRequest):
             "cuadernillo": cuadernillos,
             "message": "Datos obtenidos correctamente"
         })
-        response.set_cookie("session_id", session_id, httponly=True, max_age=3600, samesite="lax")
+        response.set_cookie(
+            "session_id",
+            session_id,
+            httponly=True,
+            max_age=3600,
+            samesite="none",  # si usas dominios cruzados, si no puedes dejarlo en "lax"
+            secure=True       # obligatorio en HTTPS
+        )
         return response
 
     return JSONResponse(
