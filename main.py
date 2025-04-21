@@ -34,11 +34,9 @@ class Sesion(SQLModel, table=True):
 # engine = create_engine("sqlite:///sesiones.db")
 # Usando pymysql como conector
 # Nueva conexión a MySQL
-engine = create_engine(
-    "mysql+pymysql://cepreuna_user:C3pr3Un4@2025@127.0.0.1/cepreuna_db"
-)
-# DATABASE_URL = "mysql+pymysql://root:@localhost:3306/cepreuna_test_db"
-# engine = create_engine(DATABASE_URL, echo=True)
+
+DATABASE_URL = "mysql+pymysql://cepreuna_user:C3pr3Un4%402025@127.0.0.1/cepreuna_db"
+engine = create_engine(DATABASE_URL, echo=True)
 SQLModel.metadata.create_all(engine)
 
 
