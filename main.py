@@ -8,6 +8,8 @@ from urllib.parse import unquote
 from bs4 import BeautifulSoup
 from typing import List, Optional
 from sqlmodel import Field, SQLModel, create_engine, Session
+import pymysql
+pymysql.install_as_MySQLdb()
 from datetime import datetime, timedelta
 import uuid
 import requests
@@ -29,8 +31,13 @@ class Sesion(SQLModel, table=True):
     fecha_login: datetime = Field(default_factory=datetime.utcnow)
 
 # --- BASE DE DATOS ---
-engine = create_engine("sqlite:///sesiones.db")
+# engine = create_engine("sqlite:///sesiones.db")
+# Usando pymysql como conector
+DATABASE_URL = "mysql+pymysql://cepreuna_user:123456789@localhost/cepreuna_db"
+# DATABASE_URL = "mysql+pymysql://root:@localhost:3306/cepreuna_test_db"
+engine = create_engine(DATABASE_URL, echo=True)
 SQLModel.metadata.create_all(engine)
+
 
 SESSION_TIMEOUT_MINUTES = 60  # Tiempo de expiración de sesión
 
