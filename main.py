@@ -35,7 +35,7 @@ class Sesion(SQLModel, table=True):
 # Usando pymysql como conector
 # Nueva conexión a MySQL
 engine = create_engine(
-    "mysql+pymysql://cepreuna_user:C3pr3Un4@2025@localhost/cepreuna_db"
+    "mysql+pymysql://cepreuna_user:C3pr3Un4@2025@127.0.0.1/cepreuna_db"
 )
 # DATABASE_URL = "mysql+pymysql://root:@localhost:3306/cepreuna_test_db"
 # engine = create_engine(DATABASE_URL, echo=True)
