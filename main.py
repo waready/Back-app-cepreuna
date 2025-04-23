@@ -104,11 +104,15 @@ def obtener_sesion(session_id: str) -> Optional[Sesion]:
 
 app = FastAPI()
 
-origins = ["*"]  # no se usará directamente, pero lo dejamos para completar
+origins = ["http://localhost:3000",
+           "http://127.0.0.1:3000",
+           "https://waready.github.io/cepreuna-frontend/",
+           "https://waready.github.io"]  # no se usará directamente, pero lo dejamos para completar
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex='.*',  # ✅ permite cualquier dominio usando regex
+    #allow_origin_regex='.*',  # ✅ permite cualquier dominio usando regex
+    allow_origins=origins, 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
