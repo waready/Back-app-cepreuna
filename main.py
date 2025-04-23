@@ -7,7 +7,8 @@ from pydantic import BaseModel
 from urllib.parse import unquote
 from bs4 import BeautifulSoup
 from typing import List, Optional
-from sqlmodel import Field, SQLModel, create_engine, Session
+from enum import Enum
+from sqlmodel import Field, SQLModel, create_engine, Session, select, update, delete
 import pymysql
 pymysql.install_as_MySQLdb()
 from datetime import datetime, timedelta
@@ -21,7 +22,14 @@ import html as html_module
 
 logger = logging.getLogger('uvicorn.error')
 
+class TipoVocacionalEnum(str, Enum):
+    uno = "1"
+    dos = "2"
 
+class AreaEnum(str, Enum):
+    sociales = "1"
+    ingenieria = "2"
+    biologia = "3"
 
 # --- MODELO SQLMODEL PARA SESIONES ---
 class Sesion(SQLModel, table=True):
@@ -30,12 +38,47 @@ class Sesion(SQLModel, table=True):
     cookies: str  # json.dumps de las cookies
     fecha_login: datetime = Field(default_factory=datetime.utcnow)
 
+class PreguntaVocacional(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    denominacion: str
+    tipo: TipoVocacionalEnum
+    area: AreaEnum
+    puntaje: int
+    created_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
+    updated_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
+
+class RespuestaEstudianteVocacional(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    estudiante_id: int
+    estudiante_nombre: str
+    estudiante_dni: str
+
+    puntaje_ingeneria: int
+    puntaje_biologia: int
+    puntaje_sociales: int
+
+    created_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
+    updated_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
+
+class RespuestaEstudianteVocacionalDetalle(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    
+    nro_documento: str = Field(max_length=30)
+    puntaje: int
+    tipo: str = Field(max_length=1, description="0: No, 1: Sí")
+
+    preguntas_id: int = Field(foreign_key="preguntavocacional.id")
+    respuesta_id: int = Field(foreign_key="respuestaestudiantevocacional.id")
+
+    created_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
+    updated_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
 # --- BASE DE DATOS ---
 # engine = create_engine("sqlite:///sesiones.db")
 # Usando pymysql como conector
 # Nueva conexión a MySQL
 
 DATABASE_URL = "mysql+pymysql://cepreuna_user:C3pr3Un4%402025@127.0.0.1/cepreuna_db"
+#DATABASE_URL = "mysql+pymysql://root:@localhost:3306/cepreuna_test_db"
 engine = create_engine(DATABASE_URL, echo=True)
 SQLModel.metadata.create_all(engine)
 
@@ -326,15 +369,52 @@ class CepreunaAPI:
                 "Referer": self.base_url
             }
         )
-        if response.status_code == 200:
-            try:
-                return response.json()
-            except Exception as e:
-                logger.error(f"No se pudo parsear JSON de publicaciones: {e}")
-                return None
-        else:
+
+        if response.status_code != 200:
             logger.warning(f"Error {response.status_code} al obtener publicaciones.")
             return None
+
+        try:
+            publicaciones_data = response.json()
+            publicaciones = publicaciones_data.get("data", [])
+
+            for pub in publicaciones:
+                pub_id = pub.get("id")
+                user_id = pub.get("user_id")
+                rol_name = pub.get("rol", {}).get("name")
+
+                # Verificamos que todos los datos estén presentes
+                if pub_id and user_id and rol_name:
+                    try:
+                        data_response = self.session.get(
+                            f"{self.base_url}/recursos/get-data-user",
+                            params={
+                                "id": pub_id,
+                                "idUser": user_id,
+                                "rolName": rol_name
+                            },
+                            headers={
+                                "X-XSRF-TOKEN": xsrf_token,
+                                "Referer": self.base_url
+                            }
+                        )
+
+                        if data_response.status_code == 200:
+                            extra_data = data_response.json()
+                            pub["datos_usuario"] = extra_data.get("datos", {})
+                        else:
+                            logger.warning(f"No se pudo obtener datos del usuario para publicación {pub_id}")
+                    except Exception as e:
+                        logger.error(f"Error al obtener datos del usuario para publicación {pub_id}: {e}")
+                else:
+                    logger.warning(f"Publicación sin datos completos: ID: {pub_id}, USER_ID: {user_id}, ROL: {rol_name}")
+
+            return publicaciones_data
+
+        except Exception as e:
+            logger.error(f"No se pudo parsear JSON de publicaciones: {e}")
+            return None
+
 
     def get_cuadernillos_format(self):
         xsrf_token = self._get_decoded_cookie("XSRF-TOKEN")
@@ -363,6 +443,43 @@ class CepreunaAPI:
                 return {"cuadernillos": []}
         return {"cuadernillos": []}
    
+    def crear_publicacion(self, usuario: dict, texto: str, tipo: int, imagen: Optional[UploadFile] = None):
+        xsrf_token = self._get_decoded_cookie("XSRF-TOKEN")
+
+        headers = {
+            "X-XSRF-TOKEN": xsrf_token,
+            "Referer": self.base_url
+        }
+
+        # Form data
+        data = {
+            "usuario": json.dumps(usuario),
+            "texto": texto,
+            "tipo": str(tipo)
+        }
+
+        files = {}
+        if imagen:
+            files["imagen"] = (imagen.filename, imagen.file, imagen.content_type)
+
+        try:
+            response = self.session.post(
+                f"{self.base_url}/crear-publicacion",
+                headers=headers,
+                data=data,
+                files=files if files else None
+            )
+
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logger.warning(f"Error {response.status_code} al crear publicación.")
+                return None
+
+        except Exception as e:
+            logger.error(f"Error al enviar publicación: {e}")
+            return None
+
 
 #################################
 ###### Pantallas Inertia  #######
@@ -957,6 +1074,29 @@ async def registrar_pago(data: TokenRequest, session_id: str = Cookie(None)):
     
     return JSONResponse(status_code=403, content={"error": "Sesión expirada o no válida"})
 
+@app.post("/api/crear-publicacion")
+async def crear_publicacion(
+    usuario: str = Form(...),
+    texto: str = Form(...),
+    tipo: int = Form(...),
+    imagen: Optional[UploadFile] = File(None),
+    session_id: str = Cookie(None)
+):
+    if not session_id or not obtener_sesion(session_id):
+        return JSONResponse(status_code=403, content={"error": "Sesión no válida o expirada."})
+    
+    api = CepreunaAPI(session_id)
+    if not api.is_logged_in():
+        return JSONResponse(status_code=403, content={"error": "Sesión expirada o no válida"})
+    
+    return api.crear_publicacion(
+        usuario=json.loads(usuario),  # porque viene como string desde FormData
+        texto=texto,
+        tipo=tipo,
+        imagen=imagen
+    )
+
+
 #############################################################
 
 @app.get("/api/page/dashboard")
@@ -1019,3 +1159,97 @@ async def get_page_pagos(session_id: str = Cookie(None)):
     if api.is_logged_in():
         return api.get_page_pagos()
     return JSONResponse(status_code=403, content={"error": "Sesión expirada o no válida"})
+
+###################################################################################################
+@app.get("/api/preguntas")
+def listar_preguntas():
+    with Session(engine) as db:
+        preguntas = db.exec(select(PreguntaVocacional)).all()
+        return preguntas
+
+@app.post("/api/preguntas")
+def crear_pregunta(
+    denominacion: str = Form(...),
+    tipo: str = Form(...),
+    area: str = Form(...),
+    puntaje: int = Form(...),
+    session_id: Optional[str] = Cookie(None)
+):
+    if not session_id or not obtener_sesion(session_id):
+        return JSONResponse(status_code=403, content={"error": "Sesión inválida"})
+
+    pregunta = PreguntaVocacional(
+        denominacion=denominacion,
+        tipo=tipo,
+        area=area,
+        puntaje=puntaje
+    )
+    with Session(engine) as db:
+        db.add(pregunta)
+        db.commit()
+        db.refresh(pregunta)
+        return pregunta
+
+@app.get("/api/respuestas")
+def listar_respuestas():
+    with Session(engine) as db:
+        respuestas = db.exec(select(RespuestaEstudianteVocacional)).all()
+        return respuestas
+
+@app.post("/api/respuestas")
+def crear_respuesta(
+    estudiante_id: int = Form(...),
+    estudiante_nombre: str = Form(...),
+    estudiante_dni: str = Form(...),
+    puntaje_ingeneria: int = Form(...),
+    puntaje_biologia: int = Form(...),
+    puntaje_sociales: int = Form(...),
+    session_id: Optional[str] = Cookie(None)
+):
+    if not session_id or not obtener_sesion(session_id):
+        return JSONResponse(status_code=403, content={"error": "Sesión inválida"})
+
+    respuesta = RespuestaEstudianteVocacional(
+        estudiante_id=estudiante_id,
+        estudiante_nombre=estudiante_nombre,
+        estudiante_dni=estudiante_dni,
+        puntaje_ingeneria=puntaje_ingeneria,
+        puntaje_biologia=puntaje_biologia,
+        puntaje_sociales=puntaje_sociales
+    )
+    with Session(engine) as db:
+        db.add(respuesta)
+        db.commit()
+        db.refresh(respuesta)
+        return respuesta
+
+@app.get("/api/respuestas-detalle")
+def listar_respuestas_detalle():
+    with Session(engine) as db:
+        detalles = db.exec(select(RespuestaEstudianteVocacionalDetalle)).all()
+        return detalles
+
+@app.post("/api/respuestas-detalle")
+def crear_detalle(
+    nro_documento: str = Form(...),
+    puntaje: int = Form(...),
+    tipo: str = Form(...),
+    preguntas_id: int = Form(...),
+    respuesta_id: int = Form(...),
+    session_id: Optional[str] = Cookie(None)
+):
+    if not session_id or not obtener_sesion(session_id):
+        return JSONResponse(status_code=403, content={"error": "Sesión inválida"})
+
+    detalle = RespuestaEstudianteVocacionalDetalle(
+        nro_documento=nro_documento,
+        puntaje=puntaje,
+        tipo=tipo,
+        preguntas_id=preguntas_id,
+        respuesta_id=respuesta_id
+    )
+    with Session(engine) as db:
+        db.add(detalle)
+        db.commit()
+        db.refresh(detalle)
+        return detalle
