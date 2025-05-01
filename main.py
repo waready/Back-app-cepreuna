@@ -1302,7 +1302,7 @@ def crear_respuesta(
                 puntaje=d.puntaje,
                 tipo=d.tipo,
                 preguntas_id=d.preguntas_id,
-                respuesta_id=d.respuesta_id
+                respuesta_id=respuesta.id
             )
             db.add(detalle)
 
