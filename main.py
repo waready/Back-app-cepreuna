@@ -127,6 +127,23 @@ class LoginRequest(BaseModel):
 
 class TokenRequest(BaseModel):
     tokens: List[str]
+
+class Detalle(BaseModel):
+    nro_documento: str
+    puntaje: int
+    tipo: str
+    preguntas_id: int
+    respuesta_id: int
+
+class RespuestaConDetalles(BaseModel):
+    estudiante_id: int
+    estudiante_nombre: str
+    estudiante_dni: str
+    puntaje_ingeneria: int
+    puntaje_biologia: int
+    puntaje_sociales: int
+    detalles: List[Detalle]
+
 #########################
 ###### Funciones  #######
 ######################### 
@@ -1257,3 +1274,37 @@ def crear_detalle(
         db.commit()
         db.refresh(detalle)
         return detalle
+
+@app.post("/api/respuestasAll")
+def crear_respuesta(
+    datos: RespuestaConDetalles,
+    session_id: Optional[str] = Cookie(None)
+):
+    if not session_id or not obtener_sesion(session_id):
+        return JSONResponse(status_code=403, content={"error": "Sesión inválida"})
+
+    with Session(engine) as db:
+        respuesta = RespuestaEstudianteVocacional(
+            estudiante_id=datos.estudiante_id,
+            estudiante_nombre=datos.estudiante_nombre,
+            estudiante_dni=datos.estudiante_dni,
+            puntaje_ingeneria=datos.puntaje_ingeneria,
+            puntaje_biologia=datos.puntaje_biologia,
+            puntaje_sociales=datos.puntaje_sociales
+        )
+        db.add(respuesta)
+        db.commit()
+        db.refresh(respuesta)
+
+        for d in datos.detalles:
+            detalle = RespuestaEstudianteVocacionalDetalle(
+                nro_documento=d.nro_documento,
+                puntaje=d.puntaje,
+                tipo=d.tipo,
+                preguntas_id=d.preguntas_id,
+                respuesta_id=d.respuesta_id
+            )
+            db.add(detalle)
+
+        db.commit()
+        return {"mensaje": "Guardado correctamente", "respuesta_id": respuesta.id}
