@@ -1308,3 +1308,17 @@ def crear_respuesta(
 
         db.commit()
         return {"mensaje": "Guardado correctamente", "respuesta_id": respuesta.id}
+        
+@app.post("/api/respuestas/comprobar")
+def comprobar_respuesta(
+    dni: str = Form(...),
+    session_id: Optional[str] = Cookie(None)
+):
+    if not session_id or not obtener_sesion(session_id):
+        return JSONResponse(status_code=403, content={"error": "Sesión inválida"})
+
+    with Session(engine) as db:
+        existente = db.exec(
+            select(RespuestaEstudianteVocacional).where(RespuestaEstudianteVocacional.estudiante_dni == dni)
+        ).first()
+        return {"existe": bool(existente)}
