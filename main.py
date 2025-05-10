@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from fastapi import FastAPI, File, Form, UploadFile, Query, Cookie
+from fastapi import FastAPI, File, Form, UploadFile, Query, Cookie, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel
@@ -926,6 +926,31 @@ class CepreunaAPI:
         logger.warning(f"Fallo al obtener Inertia JSON (código {inertia_response.status_code})")
         return None
 
+
+############################
+###### Response PDF #######
+############################
+
+    def get_constancia_pdf(self, estudiante_id: int):
+        xsrf_token = self._get_decoded_cookie("XSRF-TOKEN")
+        url = f"{self.base_url}/estudiantes/constancia-test/{estudiante_id}"
+        headers = {
+            "X-XSRF-TOKEN": xsrf_token,
+            "Referer": self.base_url
+        }
+
+        response = self.session.get(url, headers=headers)
+
+        if response.status_code == 200:
+            return response.content
+        elif response.status_code == 401:
+            return {"error": "No autorizado (401). La sesión ha caducado."}
+        elif response.status_code == 404:
+            return {"error": "Recurso no encontrado (404)."}
+        else:
+            return {"error": f"Error inesperado ({response.status_code}): {response.text}"}
+
+
 #########################
 #######   Rutas  ########
 ######################### 
@@ -1322,3 +1347,26 @@ def comprobar_respuesta(
             select(RespuestaEstudianteVocacional).where(RespuestaEstudianteVocacional.estudiante_dni == dni)
         ).first()
         return {"existe": bool(existente)}
+    
+##########################################################
+
+@app.get("/api/page/constancia/{estudiante_id}")
+async def get_constancia(estudiante_id: int, session_id: str = Cookie(None)):
+    if not session_id or not obtener_sesion(session_id):
+        return JSONResponse(status_code=403, content={"error": "Sesión no válida o expirada."})
+
+    api = CepreunaAPI(session_id)
+    if api.is_logged_in():
+        resultado = api.get_constancia_pdf(estudiante_id)
+        if isinstance(resultado, dict) and "error" in resultado:
+            return JSONResponse(status_code=400, content=resultado)
+
+        return Response(
+            content=resultado,  # resultado debe ser bytes (el PDF)
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'inline; filename="constancia_{estudiante_id}.pdf"'
+            }
+        )
+
+    return JSONResponse(status_code=403, content={"error": "Sesión expirada o no válida"})
